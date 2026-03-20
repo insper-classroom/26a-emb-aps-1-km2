@@ -46,11 +46,11 @@ void tocar_som(int cor);
 
 void botoes() {
     for(int i = 0; i < 4; i++) {
-        gpio_init(botoes_pins[i]);
-        gpio_set_dir(botoes_pins[i], GPIO_IN);
-        gpio_pull_up(botoes_pins[i]); 
+        gpio_init(botoes_pin[i]);
+        gpio_set_dir(botoes_pin[i], GPIO_IN);
+        gpio_pull_up(botoes_pin[i]); 
 
-        gpio_set_irq_enabled_with_callback(botoes_pins[i], GPIO_IRQ_EDGE_FALL, true, &btn_callback);
+        gpio_set_irq_enabled_with_callback(botoes_pin[i], GPIO_IRQ_EDGE_FALL, true, &btn_callback);
 
         gpio_init(leds_pin[i]);
         gpio_set_dir(leds_pin[i], GPIO_OUT);
