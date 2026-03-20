@@ -7,7 +7,8 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
-#include <time.h> //pode?
+#include <stdlib.h> // 
+#include <time.h> //
 
 #define btn_r 1
 #define btn_g 2
@@ -22,25 +23,37 @@
 #define audio 9
 #define buzzer 10
 
-const int botoes[4] = {btn_r, btn_g, btn_b, btn_y};
-const int leds[4] = {led_r, led_g, led_b, led_y};
+const int botoes_pin[4] = {btn_r, btn_g, btn_b, btn_y};
+const int leds_pin[4] = {led_r, led_g, led_b, led_y};
 
 int sequencia[20]; 
 int tamanho = 0;
-int flg_inicio=0;
-int flg_rodando=0;
+volatile int flg_inicio=0;
+volatile int flg_rodando=0;
 volatile int flg_botao[4] = {0, 0, 0, 0};
+
+// 
+void btn_callback(uint gpio, uint32_t events);
+void botoes(void);
+void new_game(void);
+void next_level(void);
+void perdeu(void);
+void jogada(void);
+void acender_led(int cor, int tempo_ms);
+void tocar_som(int cor);
+
+//
 
 void botoes() {
     for(int i = 0; i < 4; i++) {
-        gpio_init(botoes[i]);
-        gpio_set_dir(botoes[i], GPIO_IN);
-        gpio_pull_up(botoes[i]); 
+        gpio_init(botoes_pins[i]);
+        gpio_set_dir(botoes_pins[i], GPIO_IN);
+        gpio_pull_up(botoes_pins[i]); 
 
-        gpio_set_irq_enabled_with_callback(botoes[i], GPIO_IRQ_EDGE_FALL, true, &btn_callback);
+        gpio_set_irq_enabled_with_callback(botoes_pins[i], GPIO_IRQ_EDGE_FALL, true, &btn_callback);
 
-        gpio_init(leds[i]);
-        gpio_set_dir(leds[i], GPIO_OUT);
+        gpio_init(leds_pin[i]);
+        gpio_set_dir(leds_pin[i], GPIO_OUT);
     }
 
     gpio_init(buzzer);
@@ -54,11 +67,16 @@ void btn_callback(uint gpio, uint32_t events) {
     if (!flg_rodando){
         flg_inicio=1;
     }else{
-        for(int i = 0; i < 4; i++) {
-            if(gpio == botoes[i]) {
-                flg_botao[i] = 1;
-            }
-    }
+        if (gpio == btn_r) {
+            flg_botao[0] = 1;
+        } else if (gpio == btn_g) {
+            flg_botao[1] = 1;
+        } else if (gpio == btn_b) {
+            flg_botao[2] = 1;
+        } else if (gpio == btn_y) {
+            flg_botao[3] = 1;
+        }
+        
     }
   }
     
@@ -68,23 +86,27 @@ void new_game() {
     srand(time(NULL));
     tamanho = 0;
     flg_rodando=1;
+
+    for(int i = 0; i < 4; i++) {
+        flg_botao[i] = 0;
+    }
     
     next_level();
 }
 
 void acender_led(int cor, int tempo_ms) {
-    gpio_put(leds[cor], 1);
+    gpio_put(leds_pin[cor], 1);
     sleep_ms(tempo_ms);
-    gpio_put(leds[cor], 0);
+    gpio_put(leds_pin[cor], 0);
 }
 
 void tocar_som(int cor) {
 
-    int frequencias[4] = {262, 294, 330, 349}; // Dó, Ré, Mi, Fá
+    const int frequencias[4] = {262, 294, 330, 349}; // Dó, Ré, Mi, Fá
     
-    for(int i = 0; i < 100; i++) {
+    for(int i = 0; i < 50; i++) {
         gpio_put(buzzer, 1);
-        sleep_us(500000 / frequencias[cor]);  // Meio período
+        sleep_us(500000 / frequencias[cor]);  
         gpio_put(buzzer, 0);
         sleep_us(500000 / frequencias[cor]);
     }
@@ -105,11 +127,11 @@ void next_level(){
         flg_rodando = 0;
         for(int j = 0; j < 3; j++) {
             for(int i = 0; i < 4; i++) {
-                gpio_put(leds[i], 1);
+                gpio_put(leds_pin[i], 1);
             }
             sleep_ms(200);
             for(int i = 0; i < 4; i++) {
-                gpio_put(leds[i], 0);
+                gpio_put(leds_pin[i], 0);
             }
             sleep_ms(200);
         }
@@ -124,11 +146,11 @@ void perdeu() {
    
     for(int j = 0; j < 3; j++) {
         for(int i = 0; i < 4; i++) {
-            gpio_put(leds[i], 1);
+            gpio_put(leds_pin[i], 1);
         }
         sleep_ms(200);
         for(int i = 0; i < 4; i++) {
-            gpio_put(leds[i], 0);
+            gpio_put(leds_pin[i], 0);
         }
         sleep_ms(200);
     }
@@ -139,7 +161,7 @@ void perdeu() {
 
 
 void jogada (){
-    int n_jogada = 0;
+    static int n_jogada = 0;
     
     for(int i = 0; i < 4; i++) {
         if (flg_botao[i]){
@@ -159,7 +181,7 @@ void jogada (){
                     next_level();  
                 }
             }else{
-                erro();
+                perdeu();
 
                 flg_rodando=0;
                 n_jogada=0;
