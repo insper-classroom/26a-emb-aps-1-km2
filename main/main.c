@@ -1,8 +1,9 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 #include "hardware/gpio.h"
-#include <stdlib.h> // 
-#include <time.h> //
+#include <stdlib.h>
+#include <time.h>
 #include "hardware/pwm.h"
 #include "hardware/irq.h"
 #include "hardware/clocks.h"
@@ -12,6 +13,7 @@
 #include "lose.h"
 #include "music.h"
 
+// ================= PINOS =================
 #define btn_r 15
 #define btn_g 14
 #define btn_b 12
@@ -33,36 +35,37 @@
 #define led_9 10
 #define led_10 11
 
-
-// #define audio 9
 #define buzzer 28
-
 #define AUDIO_PIN 16
 
 #define DEBOUNCE_TIME_MS 100
-
 #define VOLUME_PCT 5  
 
+// ================= ARRAYS =================
 const int pontos[10] = { led_10, led_9, led_8, led_7, led_6, led_5, led_4, led_3, led_2, led_1};
 const int botoes_pin[4] = {btn_r, btn_g, btn_b, btn_y};
 const int leds_pin[4] = {led_r, led_g, led_b, led_y};
 
-int sequencia[20]; //
-int tamanho = 0; //
+// ================= VARIÁVEIS =================
+int sequencia[20];
+int tamanho = 0;
+
 volatile int flg_inicio = 0;
-volatile int flg_rodando = 0; //
+volatile int flg_rodando = 0;
 volatile int flg_botao[4] = {0, 0, 0, 0};
 volatile int aguardando_jogada = 0;
-volatile uint32_t ultimo_tempo_botao[4] = {0, 0, 0, 0}; //
-volatile int btn_p = 0; //botao pensando
+volatile uint32_t ultimo_tempo_botao[4] = {0, 0, 0, 0};
+volatile int btn_p = 0;
 
+// ================= AUDIO =================
 const uint8_t* som_atual = NULL;
 uint32_t tamanho_atual = 0;
 uint32_t wav_position = 0;
 volatile bool tocando = false;
 volatile bool audio_loop = false;
 
-//
+// ================= PROTÓTIPOS =================
+void core1_entry();
 void btn_callback(uint gpio, uint32_t events);
 void botoes(void);
 void new_game(void);
@@ -73,9 +76,8 @@ void atualizar_pontuacao(void);
 void limpar_pontuacao(void);
 void acender_led(int cor, int tempo_ms);
 void tocar_som(int cor);
-//
 
-
+// ================= PWM IRQ (CORE 1) =================
 void pwm_interrupt_handler() {
     pwm_clear_irq(pwm_gpio_to_slice_num(AUDIO_PIN));
 
@@ -83,7 +85,6 @@ void pwm_interrupt_handler() {
         if (wav_position < (tamanho_atual << 3)) {
             uint8_t sample = som_atual[wav_position >> 3];
 
-            // reduz volume sem distorcer tanto
             int centered = (int)sample - 128;
             centered = (centered * VOLUME_PCT) / 100;
             int output = centered + 128;
@@ -116,10 +117,6 @@ void tocar_audio(const uint8_t* som, uint32_t tamanho, bool loop) {
     irq_set_enabled(PWM_IRQ_WRAP, true);
 }
 
-void tocar_musica_fundo(void) {
-    tocar_audio(WAV_DATA_MUSIC, WAV_DATA_LENGTH_MUSIC, true);
-}
-
 void init_audio() {
     set_sys_clock_khz(176000, true);
 
@@ -138,22 +135,46 @@ void init_audio() {
     pwm_config_set_wrap(&config, 250);
 
     pwm_init(slice, &config, true);
-
-    pwm_set_gpio_level(AUDIO_PIN, 0);
 }
 
+// ================= CORE 1 (ÁUDIO) =================
+void core1_entry() {
+    init_audio();
+
+    while (1) {
+        uint32_t cmd = multicore_fifo_pop_blocking();
+
+        if (cmd == 1) {
+            tocar_audio(WAV_DATA_MUSIC, WAV_DATA_LENGTH_MUSIC, true);
+        }
+        else if (cmd == 2) {
+            tocar_audio(WAV_DATA_WIN, WAV_DATA_LENGTH_WIN, false);
+        }
+        else if (cmd == 3) {
+            tocar_audio(WAV_DATA_LOSE, WAV_DATA_LENGTH_LOSE, false);
+        }
+        else if (cmd >= 10 && cmd <= 13) {
+            tocar_som(cmd - 10); // usa função original
+        }
+    }
+}
+
+// ================= HARDWARE =================
 void botoes() {
     for(int i = 0; i < 10; i++) {
         gpio_init(pontos[i]);
         gpio_set_dir(pontos[i], GPIO_OUT);
         gpio_put(pontos[i], 0);
     }
+
     for(int i = 0; i < 4; i++) {
         gpio_init(botoes_pin[i]);
         gpio_set_dir(botoes_pin[i], GPIO_IN);
-        gpio_pull_up(botoes_pin[i]); 
+        gpio_pull_up(botoes_pin[i]);
 
-        gpio_set_irq_enabled_with_callback(botoes_pin[i], GPIO_IRQ_EDGE_FALL, true, &btn_callback);
+        gpio_set_irq_enabled_with_callback(
+            botoes_pin[i], GPIO_IRQ_EDGE_FALL, true, &btn_callback
+        );
 
         gpio_init(leds_pin[i]);
         gpio_set_dir(leds_pin[i], GPIO_OUT);
@@ -163,6 +184,7 @@ void botoes() {
     gpio_set_dir(buzzer, GPIO_OUT);
 }
 
+// ================= JOGO =================
 void limpar_pontuacao(void) {
     for(int i = 0; i < 10; i++) {
         gpio_put(pontos[i], 0);
@@ -175,35 +197,20 @@ void atualizar_pontuacao(void) {
     }
 }
 
-
 void btn_callback(uint gpio, uint32_t events) {
-    if (events == 0x4) { 
+    if (events == 0x4) {
         if (!flg_rodando) {
             flg_inicio = 1;
         } else {
-            if (aguardando_jogada && !btn_p) { 
+            if (aguardando_jogada && !btn_p) {
                 uint32_t tempo_atual = to_ms_since_boot(get_absolute_time());
-                
-           
-                if (gpio == btn_r && flg_botao[0] == 0 && 
-                    (tempo_atual - ultimo_tempo_botao[0] > DEBOUNCE_TIME_MS)) {
-                    ultimo_tempo_botao[0] = tempo_atual;
-                    flg_botao[0] = 1;
 
-                } else if (gpio == btn_g && flg_botao[1] == 0 && 
-                           (tempo_atual - ultimo_tempo_botao[1] > DEBOUNCE_TIME_MS)) {
-                    ultimo_tempo_botao[1] = tempo_atual;
-                    flg_botao[1] = 1;
-
-                } else if (gpio == btn_b && flg_botao[2] == 0 && 
-                           (tempo_atual - ultimo_tempo_botao[2] > DEBOUNCE_TIME_MS)) {
-                    ultimo_tempo_botao[2] = tempo_atual;
-                    flg_botao[2] = 1;
-
-                } else if (gpio == btn_y && flg_botao[3] == 0 && 
-                           (tempo_atual - ultimo_tempo_botao[3] > DEBOUNCE_TIME_MS)) {
-                    ultimo_tempo_botao[3] = tempo_atual;
-                    flg_botao[3] = 1;
+                for(int i = 0; i < 4; i++) {
+                    if (gpio == botoes_pin[i] &&
+                        (tempo_atual - ultimo_tempo_botao[i] > DEBOUNCE_TIME_MS)) {
+                        ultimo_tempo_botao[i] = tempo_atual;
+                        flg_botao[i] = 1;
+                    }
                 }
             }
         }
@@ -221,8 +228,10 @@ void new_game() {
         flg_botao[i] = 0;
         ultimo_tempo_botao[i] = 0;
     }
+
     limpar_pontuacao();
-    tocar_musica_fundo(); 
+
+    multicore_fifo_push_blocking(1); // música
     next_level();
 }
 
@@ -233,16 +242,15 @@ void acender_led(int cor, int tempo_ms) {
 }
 
 void tocar_som(int cor) {
-    const int frequencias[4] = {262, 294, 330, 349}; // Dó, Ré, Mi, Fá
-    
+    const int frequencias[4] = {262, 294, 330, 349};
+
     for(int i = 0; i < 50; i++) {
         gpio_put(buzzer, 1);
-        sleep_us(500000 / frequencias[cor]);  
+        sleep_us(500000 / frequencias[cor]);
         gpio_put(buzzer, 0);
         sleep_us(500000 / frequencias[cor]);
     }
 }
-
 
 void next_level() {
     if (tamanho <= 10) {
@@ -251,14 +259,15 @@ void next_level() {
 
         for(int i = 0; i < tamanho; i++) {
             int cor = sequencia[i];
-            acender_led(cor, 300);  
-            tocar_som(cor);
-            sleep_ms(200);  
+            acender_led(cor, 300);
+
+            multicore_fifo_push_blocking(10 + cor); // som no core 1
+            sleep_ms(200);
         }
 
-        //
         aguardando_jogada = 1;
-        btn_p = 0; 
+        btn_p = 0;
+
         for(int i = 0; i < 4; i++) {
             flg_botao[i] = 0;
         }
@@ -266,18 +275,15 @@ void next_level() {
         flg_rodando = 0;
         aguardando_jogada = 0;
         btn_p = 0;
+
         for(int j = 0; j < 3; j++) {
-            for(int i = 0; i < 4; i++) {
-                gpio_put(leds_pin[i], 1);
-            }
+            for(int i = 0; i < 4; i++) gpio_put(leds_pin[i], 1);
             sleep_ms(200);
-            for(int i = 0; i < 4; i++) {
-                gpio_put(leds_pin[i], 0);
-            }
+            for(int i = 0; i < 4; i++) gpio_put(leds_pin[i], 0);
             sleep_ms(200);
         }
-        tocar_audio(WAV_DATA_WIN, WAV_DATA_LENGTH_WIN, false);
-        
+
+        multicore_fifo_push_blocking(2); // vitória
     }
 }
 
@@ -287,48 +293,38 @@ void perdeu() {
     btn_p = 0;
 
     limpar_pontuacao();
-   
+
     for(int j = 0; j < 3; j++) {
-        for(int i = 0; i < 4; i++) {
-            gpio_put(leds_pin[i], 1);
-        }
+        for(int i = 0; i < 4; i++) gpio_put(leds_pin[i], 1);
         sleep_ms(200);
-        for(int i = 0; i < 4; i++) {
-            gpio_put(leds_pin[i], 0);
-        }
+        for(int i = 0; i < 4; i++) gpio_put(leds_pin[i], 0);
         sleep_ms(200);
     }
-    tocar_audio(WAV_DATA_LOSE, WAV_DATA_LENGTH_LOSE, false);
+
+    multicore_fifo_push_blocking(3); // derrota
 }
 
 void jogada() {
     static int n_jogada = 0;
-    static int btn_c = 0;// botao computado
-    
-   //
-    if (!aguardando_jogada) {
-        return;
-    }
-    
-   
+    static int btn_c = 0;
+
+    if (!aguardando_jogada) return;
+
     sleep_ms(10);
-    
-    
-    if (btn_c) {
-        return;
-    }
-    
+
+    if (btn_c) return;
+
     for(int i = 0; i < 4; i++) {
         if (flg_botao[i]) {
             btn_p = 1;
             btn_c = 1;
             flg_botao[i] = 0;
 
-            
             acender_led(i, 150);
-            tocar_som(i);
+            multicore_fifo_push_blocking(10 + i);
+
             sleep_ms(50);
-            
+
             if(i == sequencia[n_jogada]) {
                 n_jogada++;
 
@@ -339,7 +335,7 @@ void jogada() {
                     btn_p = 0;
                     btn_c = 0;
                     sleep_ms(500);
-                    next_level();  
+                    next_level();
                 } else {
                     btn_p = 0;
                     btn_c = 0;
@@ -347,32 +343,35 @@ void jogada() {
             } else {
                 perdeu();
                 n_jogada = 0;
-                btn_p = 0; 
-                btn_c = 0; 
+                btn_p = 0;
+                btn_c = 0;
             }
             break;
         }
     }
-    
-    if (!btn_c) {
-        btn_p = 0;
-    }
+
+    if (!btn_c) btn_p = 0;
 }
 
+// ================= MAIN =================
 int main() {
     stdio_init_all();
     botoes();
-    init_audio();
+
+    multicore_launch_core1(core1_entry); // inicia core 1
 
     while (true) {
         if (flg_inicio) {
-            flg_inicio = 0; 
+            flg_inicio = 0;
             new_game();
         }
+
         if (flg_rodando) {
             jogada();
         }
+
         sleep_ms(10);
     }
+
     return 0;
 }

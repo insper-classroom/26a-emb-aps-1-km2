@@ -9,6 +9,7 @@ target_link_libraries(pico_emb
     hardware_pwm
     hardware_irq
     hardware_clocks
+    pico_multicore
 )
 
 pico_add_extra_outputs(pico_emb)
