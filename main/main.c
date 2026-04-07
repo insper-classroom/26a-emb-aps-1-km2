@@ -20,7 +20,7 @@
 #define btn_y 13
 
 #define led_r 18
-#define led_g 19
+#define led_g 22
 #define led_b 21
 #define led_y 20
 
@@ -40,6 +40,10 @@
 
 #define DEBOUNCE_TIME_MS 100
 #define VOLUME_PCT 5  
+
+// 🔥 TIMER
+#define TEMPO_LIMITE_MS 3000
+alarm_id_t id_alarme = -1;
 
 // ================= ARRAYS =================
 const int pontos[10] = { led_10, led_9, led_8, led_7, led_6, led_5, led_4, led_3, led_2, led_1};
@@ -77,7 +81,26 @@ void limpar_pontuacao(void);
 void acender_led(int cor, int tempo_ms);
 void tocar_som(int cor);
 
-// ================= PWM IRQ (CORE 1) =================
+// 🔥 TIMER
+void iniciar_timer();
+int64_t timeout_callback(alarm_id_t id, void *user_data);
+
+// ================= TIMER =================
+int64_t timeout_callback(alarm_id_t id, void *user_data) {
+    if (aguardando_jogada) {
+        perdeu();
+    }
+    return 0;
+}
+
+void iniciar_timer() {
+    if (id_alarme != -1) {
+        cancel_alarm(id_alarme);
+    }
+    id_alarme = add_alarm_in_ms(TEMPO_LIMITE_MS, timeout_callback, NULL, false);
+}
+
+// ================= PWM IRQ =================
 void pwm_interrupt_handler() {
     pwm_clear_irq(pwm_gpio_to_slice_num(AUDIO_PIN));
 
@@ -137,7 +160,7 @@ void init_audio() {
     pwm_init(slice, &config, true);
 }
 
-// ================= CORE 1 (ÁUDIO) =================
+// ================= CORE 1 =================
 void core1_entry() {
     init_audio();
 
@@ -154,7 +177,7 @@ void core1_entry() {
             tocar_audio(WAV_DATA_LOSE, WAV_DATA_LENGTH_LOSE, false);
         }
         else if (cmd >= 10 && cmd <= 13) {
-            tocar_som(cmd - 10); // usa função original
+            tocar_som(cmd - 10);
         }
     }
 }
@@ -231,7 +254,7 @@ void new_game() {
 
     limpar_pontuacao();
 
-    multicore_fifo_push_blocking(1); // música
+    multicore_fifo_push_blocking(1);
     next_level();
 }
 
@@ -260,13 +283,14 @@ void next_level() {
         for(int i = 0; i < tamanho; i++) {
             int cor = sequencia[i];
             acender_led(cor, 300);
-
-            multicore_fifo_push_blocking(10 + cor); // som no core 1
+            multicore_fifo_push_blocking(10 + cor);
             sleep_ms(200);
         }
 
         aguardando_jogada = 1;
         btn_p = 0;
+
+        iniciar_timer(); // 🔥 inicia timer
 
         for(int i = 0; i < 4; i++) {
             flg_botao[i] = 0;
@@ -276,6 +300,11 @@ void next_level() {
         aguardando_jogada = 0;
         btn_p = 0;
 
+        if (id_alarme != -1) {
+            cancel_alarm(id_alarme);
+            id_alarme = -1;
+        }
+
         for(int j = 0; j < 3; j++) {
             for(int i = 0; i < 4; i++) gpio_put(leds_pin[i], 1);
             sleep_ms(200);
@@ -283,7 +312,7 @@ void next_level() {
             sleep_ms(200);
         }
 
-        multicore_fifo_push_blocking(2); // vitória
+        multicore_fifo_push_blocking(2);
     }
 }
 
@@ -291,6 +320,11 @@ void perdeu() {
     flg_rodando = 0;
     aguardando_jogada = 0;
     btn_p = 0;
+
+    if (id_alarme != -1) {
+        cancel_alarm(id_alarme);
+        id_alarme = -1;
+    }
 
     limpar_pontuacao();
 
@@ -301,7 +335,7 @@ void perdeu() {
         sleep_ms(200);
     }
 
-    multicore_fifo_push_blocking(3); // derrota
+    multicore_fifo_push_blocking(3);
 }
 
 void jogada() {
@@ -327,6 +361,8 @@ void jogada() {
 
             if(i == sequencia[n_jogada]) {
                 n_jogada++;
+
+                iniciar_timer(); // 🔥 reset timer
 
                 if(n_jogada >= tamanho) {
                     atualizar_pontuacao();
@@ -358,7 +394,7 @@ int main() {
     stdio_init_all();
     botoes();
 
-    multicore_launch_core1(core1_entry); // inicia core 1
+    multicore_launch_core1(core1_entry);
 
     while (true) {
         if (flg_inicio) {
