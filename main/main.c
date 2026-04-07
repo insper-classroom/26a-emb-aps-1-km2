@@ -10,6 +10,7 @@
 
 #include "win.h"
 #include "lose.h"
+#include "music.h"
 
 #define btn_r 15
 #define btn_g 14
@@ -40,6 +41,8 @@
 
 #define DEBOUNCE_TIME_MS 100
 
+#define VOLUME_PCT 5  
+
 const int pontos[10] = { led_10, led_9, led_8, led_7, led_6, led_5, led_4, led_3, led_2, led_1};
 const int botoes_pin[4] = {btn_r, btn_g, btn_b, btn_y};
 const int leds_pin[4] = {led_r, led_g, led_b, led_y};
@@ -54,9 +57,10 @@ volatile uint32_t ultimo_tempo_botao[4] = {0, 0, 0, 0}; //
 volatile int btn_p = 0; //botao pensando
 
 const uint8_t* som_atual = NULL;
-int tamanho_atual = 0;
-int wav_position = 0;
-bool tocando = false;
+uint32_t tamanho_atual = 0;
+uint32_t wav_position = 0;
+volatile bool tocando = false;
+volatile bool audio_loop = false;
 
 //
 void btn_callback(uint gpio, uint32_t events);
@@ -71,30 +75,49 @@ void acender_led(int cor, int tempo_ms);
 void tocar_som(int cor);
 //
 
+
 void pwm_interrupt_handler() {
     pwm_clear_irq(pwm_gpio_to_slice_num(AUDIO_PIN));
 
-    if (som_atual != NULL && wav_position < (tamanho_atual << 3)) {
-        pwm_set_gpio_level(AUDIO_PIN, som_atual[wav_position >> 3]);
-        wav_position++;
-    } else {
-        // 🛑 PARA O ÁUDIO
-        irq_set_enabled(PWM_IRQ_WRAP, false);
-        pwm_set_gpio_level(AUDIO_PIN, 0);
-        tocando = false;
-    }
+    if (som_atual != NULL) {
+        if (wav_position < (tamanho_atual << 3)) {
+            uint8_t sample = som_atual[wav_position >> 3];
 
+            // reduz volume sem distorcer tanto
+            int centered = (int)sample - 128;
+            centered = (centered * VOLUME_PCT) / 100;
+            int output = centered + 128;
+
+            if (output < 0) output = 0;
+            if (output > 255) output = 255;
+
+            pwm_set_gpio_level(AUDIO_PIN, output);
+            wav_position++;
+        } else if (audio_loop) {
+            wav_position = 0;
+        } else {
+            irq_set_enabled(PWM_IRQ_WRAP, false);
+            pwm_set_gpio_level(AUDIO_PIN, 0);
+            tocando = false;
+            som_atual = NULL;
+        }
+    }
 }
 
-void tocar_audio(const uint8_t* som, int tamanho) {
+void tocar_audio(const uint8_t* som, uint32_t tamanho, bool loop) {
     irq_set_enabled(PWM_IRQ_WRAP, false);
 
     som_atual = som;
     tamanho_atual = tamanho;
     wav_position = 0;
+    audio_loop = loop;
 
-    irq_set_enabled(PWM_IRQ_WRAP, true);
     tocando = true;
+    irq_set_enabled(PWM_IRQ_WRAP, true);
+}
+
+void tocar_musica_fundo(void) {
+    tocar_audio(WAV_DATA_MUSIC, WAV_DATA_LENGTH_MUSIC, true);
 }
 
 void init_audio() {
@@ -199,6 +222,7 @@ void new_game() {
         ultimo_tempo_botao[i] = 0;
     }
     limpar_pontuacao();
+    tocar_musica_fundo(); 
     next_level();
 }
 
@@ -252,8 +276,8 @@ void next_level() {
             }
             sleep_ms(200);
         }
-        tocar_audio(WAV_DATA_WIN, WAV_DATA_LENGTH_WIN);
-        //limpar pontuacao
+        tocar_audio(WAV_DATA_WIN, WAV_DATA_LENGTH_WIN, false);
+        
     }
 }
 
@@ -274,7 +298,7 @@ void perdeu() {
         }
         sleep_ms(200);
     }
-    tocar_audio(WAV_DATA_LOSE, WAV_DATA_LENGTH_LOSE);
+    tocar_audio(WAV_DATA_LOSE, WAV_DATA_LENGTH_LOSE, false);
 }
 
 void jogada() {
@@ -336,7 +360,7 @@ void jogada() {
 }
 
 int main() {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     stdio_init_all();
+    stdio_init_all();
     botoes();
     init_audio();
 
