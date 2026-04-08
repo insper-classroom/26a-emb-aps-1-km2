@@ -85,7 +85,7 @@ void new_game(JogoState* jogo);
 void next_level(JogoState* jogo);
 void perdeu(JogoState* jogo);
 void jogada(JogoState* jogo);
-void atualizar_pontuacao(JogoState* jogo);
+void atualizar_pontuacao(const JogoState* jogo);
 void limpar_pontuacao(void);
 void acender_led(int cor, int tempo_ms);
 void tocar_som_buzzer(int cor);
@@ -229,7 +229,7 @@ void limpar_pontuacao(void) {
     }
 }
 
-void atualizar_pontuacao(JogoState* jogo) {
+void atualizar_pontuacao(const JogoState* jogo) {
     if (jogo->tamanho > 0 && jogo->tamanho <= NUM_PONTOS) {
         gpio_put(pontos[jogo->tamanho - 1], 1);
     }
