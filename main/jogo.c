@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define DEBOUNCE_TIME_MS 200
+#define DEBOUNCE_TIME_MS 50
 #define NUM_BOTOES 4
 
 volatile int flg_inicio = 0;

@@ -24,7 +24,7 @@
 #define led_9 10
 #define led_10 11
 
-#define buzzer 28
+#define buzzer 17
 #define AUDIO_PIN 16
 
 #define NUM_BOTOES 4
