@@ -57,21 +57,26 @@ typedef struct {
     int aguardando_jogada;
     int btn_p;
     alarm_id_t id_alarme;
+    int n_jogada;
+    int btn_c;
 } JogoState;
 
-static JogoState jogo = { .tamanho = 0, .flg_rodando = 0, .aguardando_jogada = 0, .btn_p = 0, .id_alarme = -1 };
+// Instância única (necessária para o programa)
+static JogoState jogo = { .tamanho = 0, .flg_rodando = 0, .aguardando_jogada = 0, 
+                          .btn_p = 0, .id_alarme = -1, .n_jogada = 0, .btn_c = 0 };
 
-// ================= VARIÁVEIS VOLÁTEIS =================
-volatile int flg_inicio = 0;
-volatile int flg_botao[4] = {0, 0, 0, 0};
-volatile uint32_t ultimo_tempo_botao[4] = {0, 0, 0, 0};
+// ================= VARIÁVEIS PARA COMUNICAÇÃO COM IRQ =================
+// Usamos variáveis estáticas com volatile para IRQ
+static volatile int flg_inicio = 0;
+static volatile int flg_botao_pressionado = -1;  // -1 = nenhum, 0-3 = botão
+static volatile uint32_t ultimo_tempo_botao[4] = {0, 0, 0, 0};
 
-// ================= AUDIO =================
-volatile const uint8_t* som_atual = NULL;
-volatile uint32_t tamanho_atual = 0;
-volatile uint32_t wav_position = 0;
-volatile bool tocando = false;
-volatile bool audio_loop = false;
+// ================= ÁUDIO (acessado pela IRQ do PWM) =================
+static volatile const uint8_t* som_atual = NULL;
+static volatile uint32_t tamanho_atual = 0;
+static volatile uint32_t wav_position = 0;
+static volatile bool tocando = false;
+static volatile bool audio_loop = false;
 
 // ================= PROTÓTIPOS =================
 void core1_entry();
@@ -92,11 +97,8 @@ int64_t timeout_callback(alarm_id_t id, void *user_data);
 
 // ================= TIMER =================
 int64_t timeout_callback(alarm_id_t id, void *user_data) {
-    // Removido sleep_ms - agora apenas agenda a ação no loop principal
     if (jogo.aguardando_jogada) {
-        // Em vez de chamar perdeu() diretamente, setamos uma flag
-        // A função perdeu() será chamada no loop principal
-        jogo.flg_rodando = 0;  // Isso fará o loop principal tratar a derrota
+        jogo.flg_rodando = 0;
     }
     return 0;
 }
@@ -228,6 +230,7 @@ void atualizar_pontuacao(void) {
     }
 }
 
+// ISR SEM LOOPS - processa apenas um botão por vez
 void btn_callback(uint gpio, uint32_t events) {
     if (events == 0x4) {
         if (!jogo.flg_rodando) {
@@ -235,15 +238,23 @@ void btn_callback(uint gpio, uint32_t events) {
         } else {
             if (jogo.aguardando_jogada && !jogo.btn_p) {
                 uint32_t tempo_atual = to_ms_since_boot(get_absolute_time());
-
-                // Loop pequeno e rápido - aceitável em ISR
-                for(int i = 0; i < 4; i++) {
-                    if (gpio == botoes_pin[i] &&
-                        (tempo_atual - ultimo_tempo_botao[i] > DEBOUNCE_TIME_MS)) {
-                        ultimo_tempo_botao[i] = tempo_atual;
-                        flg_botao[i] = 1;
-                        break;  // Sai do loop após encontrar o botão
-                    }
+                
+                // Verifica qual botão foi pressionado (sem loop)
+                if (gpio == btn_r && (tempo_atual - ultimo_tempo_botao[0] > DEBOUNCE_TIME_MS)) {
+                    ultimo_tempo_botao[0] = tempo_atual;
+                    flg_botao_pressionado = 0;
+                }
+                else if (gpio == btn_g && (tempo_atual - ultimo_tempo_botao[1] > DEBOUNCE_TIME_MS)) {
+                    ultimo_tempo_botao[1] = tempo_atual;
+                    flg_botao_pressionado = 1;
+                }
+                else if (gpio == btn_b && (tempo_atual - ultimo_tempo_botao[2] > DEBOUNCE_TIME_MS)) {
+                    ultimo_tempo_botao[2] = tempo_atual;
+                    flg_botao_pressionado = 2;
+                }
+                else if (gpio == btn_y && (tempo_atual - ultimo_tempo_botao[3] > DEBOUNCE_TIME_MS)) {
+                    ultimo_tempo_botao[3] = tempo_atual;
+                    flg_botao_pressionado = 3;
                 }
             }
         }
@@ -256,11 +267,13 @@ void new_game() {
     jogo.flg_rodando = 1;
     jogo.aguardando_jogada = 0;
     jogo.btn_p = 0;
+    jogo.n_jogada = 0;
+    jogo.btn_c = 0;
 
     for(int i = 0; i < 4; i++) {
-        flg_botao[i] = 0;
         ultimo_tempo_botao[i] = 0;
     }
+    flg_botao_pressionado = -1;
 
     limpar_pontuacao();
 
@@ -299,12 +312,12 @@ void next_level() {
 
         jogo.aguardando_jogada = 1;
         jogo.btn_p = 0;
+        jogo.n_jogada = 0;
+        jogo.btn_c = 0;
 
-        iniciar_timer(); // 🔥 inicia timer
+        iniciar_timer();
 
-        for(int i = 0; i < 4; i++) {
-            flg_botao[i] = 0;
-        }
+        flg_botao_pressionado = -1;
     } else {
         jogo.flg_rodando = 0;
         jogo.aguardando_jogada = 0;
@@ -330,6 +343,8 @@ void perdeu() {
     jogo.flg_rodando = 0;
     jogo.aguardando_jogada = 0;
     jogo.btn_p = 0;
+    jogo.n_jogada = 0;
+    jogo.btn_c = 0;
 
     if (jogo.id_alarme != -1) {
         cancel_alarm(jogo.id_alarme);
@@ -349,54 +364,47 @@ void perdeu() {
 }
 
 void jogada() {
-    static int n_jogada = 0;
-    static int btn_c = 0;
-
     if (!jogo.aguardando_jogada) return;
 
     sleep_ms(10);
 
-    if (btn_c) return;
+    if (jogo.btn_c) return;
 
-    for(int i = 0; i < 4; i++) {
-        if (flg_botao[i]) {
-            jogo.btn_p = 1;
-            btn_c = 1;
-            flg_botao[i] = 0;
+    int botao = flg_botao_pressionado;
+    
+    if (botao != -1) {
+        flg_botao_pressionado = -1;
+        jogo.btn_p = 1;
+        jogo.btn_c = 1;
 
-            acender_led(i, 150);
-            multicore_fifo_push_blocking(10 + i);
+        acender_led(botao, 150);
+        multicore_fifo_push_blocking(10 + botao);
 
-            sleep_ms(50);
+        sleep_ms(50);
 
-            if(i == jogo.sequencia[n_jogada]) {
-                n_jogada++;
+        if(botao == jogo.sequencia[jogo.n_jogada]) {
+            jogo.n_jogada++;
 
-                iniciar_timer(); // 🔥 reset timer
+            iniciar_timer();
 
-                if(n_jogada >= jogo.tamanho) {
-                    atualizar_pontuacao();
-                    n_jogada = 0;
-                    jogo.aguardando_jogada = 0;
-                    jogo.btn_p = 0;
-                    btn_c = 0;
-                    sleep_ms(500);
-                    next_level();
-                } else {
-                    jogo.btn_p = 0;
-                    btn_c = 0;
-                }
-            } else {
-                perdeu();
-                n_jogada = 0;
+            if(jogo.n_jogada >= jogo.tamanho) {
+                atualizar_pontuacao();
+                jogo.n_jogada = 0;
+                jogo.aguardando_jogada = 0;
                 jogo.btn_p = 0;
-                btn_c = 0;
+                jogo.btn_c = 0;
+                sleep_ms(500);
+                next_level();
+            } else {
+                jogo.btn_p = 0;
+                jogo.btn_c = 0;
             }
-            break;
+        } else {
+            perdeu();
         }
+    } else {
+        jogo.btn_p = 0;
     }
-
-    if (!btn_c) jogo.btn_p = 0;
 }
 
 // ================= MAIN =================
