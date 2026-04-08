@@ -1,3 +1,6 @@
+#ifndef MUSIC_H
+#define MUSIC_H
+
 #define WAV_DATA_LENGTH_MUSIC 87266 
 
 uint8_t WAV_DATA_MUSIC[] = {
@@ -5457,3 +5460,4 @@ uint8_t WAV_DATA_MUSIC[] = {
     146,144,142,142,142,141,154,167,169,172,172,172,173,160,148,146,
     143,143,136    
 };
+#endif

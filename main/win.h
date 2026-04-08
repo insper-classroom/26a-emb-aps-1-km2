@@ -1,3 +1,6 @@
+#ifndef WIN_H
+#define WIN_H
+
 #define WAV_DATA_LENGTH_WIN 16378 
 
 uint8_t WAV_DATA_WIN[] = {
@@ -1026,3 +1029,4 @@ uint8_t WAV_DATA_WIN[] = {
     122,122,122,122,122,122,122,122,122,122,122,122,122,122,122,122,
     122,122,122,122,122,122,122,122,122,122,122    
 };
+#endif

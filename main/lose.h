@@ -1,3 +1,6 @@
+#ifndef LOSE_H
+#define LOSE_H
+
 #define WAV_DATA_LENGTH_LOSE 11351 
 
 uint8_t WAV_DATA_LOSE[] = {
@@ -712,4 +715,5 @@ uint8_t WAV_DATA_LOSE[] = {
     129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,
     129,129,129,129,129,129,129,129    
 };
+#endif
 
