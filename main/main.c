@@ -51,7 +51,6 @@ static const int botoes_pin[NUM_BOTOES] = {btn_r, btn_g, btn_b, btn_y};
 static const int leds_pin[NUM_BOTOES] = {led_r, led_g, led_b, led_y};
 
 // ================= ESTRUTURA DO JOGO =================
-// NOTA: Variável global necessária para acesso em múltiplas funções e callbacks
 typedef struct {
     int sequencia[MAX_SEQUENCIA];
     int tamanho;
@@ -71,48 +70,48 @@ typedef struct {
     volatile bool audio_loop;
 } AudioState;
 
-// ================= VARIÁVEIS GLOBAIS =================
-// NOTA: Variáveis globais são necessárias para acesso em callbacks de IRQ
-static JogoState g_jogo = {0};
+// ================= VARIÁVEIS GLOBAIS (necessárias para IRQ) =================
 static AudioState g_audio = {0};
 volatile int flg_inicio = 0;
 volatile int flg_botao[NUM_BOTOES] = {0};
 volatile uint32_t ultimo_tempo_botao[NUM_BOTOES] = {0};
+static JogoState* ptr_jogo = NULL;  // Ponteiro para acesso na IRQ
 
 // ================= PROTÓTIPOS =================
 void core1_entry();
 void btn_callback(uint gpio, uint32_t events);
 void botoes_init(void);
-void new_game(void);
-void next_level(void);
-void perdeu(void);
-void jogada(void);
-void atualizar_pontuacao(void);
+void new_game(JogoState* jogo);
+void next_level(JogoState* jogo);
+void perdeu(JogoState* jogo);
+void jogada(JogoState* jogo);
+void atualizar_pontuacao(JogoState* jogo);
 void limpar_pontuacao(void);
 void acender_led(int cor, int tempo_ms);
 void tocar_som_buzzer(int cor);
-void iniciar_timer(void);
-void cancelar_timer(void);
+void iniciar_timer(JogoState* jogo);
+void cancelar_timer(JogoState* jogo);
 
 // ================= TIMER =================
 int64_t timeout_callback(alarm_id_t id, void *user_data) {
-    if (g_jogo.aguardando_jogada) {
-        g_jogo.flg_timeout = 1;
+    JogoState* jogo = (JogoState*)user_data;
+    if (jogo->aguardando_jogada) {
+        jogo->flg_timeout = 1;
     }
     return 0;
 }
 
-void iniciar_timer() {
-    if (g_jogo.id_alarme != -1) {
-        cancel_alarm(g_jogo.id_alarme);
+void iniciar_timer(JogoState* jogo) {
+    if (jogo->id_alarme != -1) {
+        cancel_alarm(jogo->id_alarme);
     }
-    g_jogo.id_alarme = add_alarm_in_ms(TEMPO_LIMITE_MS, timeout_callback, NULL, false);
+    jogo->id_alarme = add_alarm_in_ms(TEMPO_LIMITE_MS, timeout_callback, jogo, false);
 }
 
-void cancelar_timer() {
-    if (g_jogo.id_alarme != -1) {
-        cancel_alarm(g_jogo.id_alarme);
-        g_jogo.id_alarme = -1;
+void cancelar_timer(JogoState* jogo) {
+    if (jogo->id_alarme != -1) {
+        cancel_alarm(jogo->id_alarme);
+        jogo->id_alarme = -1;
     }
 }
 
@@ -230,9 +229,9 @@ void limpar_pontuacao(void) {
     }
 }
 
-void atualizar_pontuacao(void) {
-    if (g_jogo.tamanho > 0 && g_jogo.tamanho <= NUM_PONTOS) {
-        gpio_put(pontos[g_jogo.tamanho - 1], 1);
+void atualizar_pontuacao(JogoState* jogo) {
+    if (jogo->tamanho > 0 && jogo->tamanho <= NUM_PONTOS) {
+        gpio_put(pontos[jogo->tamanho - 1], 1);
     }
 }
 
@@ -247,12 +246,14 @@ static inline int identificar_botao(uint gpio) {
 
 void btn_callback(uint gpio, uint32_t events) {
     if (events == GPIO_IRQ_EDGE_FALL) {
-        if (!g_jogo.rodando) {
+        if (ptr_jogo == NULL) return;
+        
+        if (!ptr_jogo->rodando) {
             flg_inicio = 1;
             return;
         }
 
-        if (g_jogo.aguardando_jogada && !g_jogo.btn_p) {
+        if (ptr_jogo->aguardando_jogada && !ptr_jogo->btn_p) {
             uint32_t tempo_atual = to_ms_since_boot(get_absolute_time());
             int botao_id = identificar_botao(gpio);
             
@@ -281,13 +282,13 @@ void tocar_som_buzzer(int cor) {
     }
 }
 
-void new_game() {
+void new_game(JogoState* jogo) {
     srand(time(NULL));
-    g_jogo.tamanho = 0;
-    g_jogo.rodando = 1;
-    g_jogo.aguardando_jogada = 0;
-    g_jogo.btn_p = 0;
-    g_jogo.flg_timeout = 0;
+    jogo->tamanho = 0;
+    jogo->rodando = 1;
+    jogo->aguardando_jogada = 0;
+    jogo->btn_p = 0;
+    jogo->flg_timeout = 0;
 
     for(int i = 0; i < NUM_BOTOES; i++) {
         flg_botao[i] = 0;
@@ -296,35 +297,35 @@ void new_game() {
 
     limpar_pontuacao();
     multicore_fifo_push_blocking(1);
-    next_level();
+    next_level(jogo);
 }
 
-void next_level() {
-    if (g_jogo.tamanho <= 10) {
-        g_jogo.sequencia[g_jogo.tamanho] = rand() % 4;
-        g_jogo.tamanho++;
+void next_level(JogoState* jogo) {
+    if (jogo->tamanho <= 10) {
+        jogo->sequencia[jogo->tamanho] = rand() % 4;
+        jogo->tamanho++;
 
-        for(int i = 0; i < g_jogo.tamanho; i++) {
-            int cor = g_jogo.sequencia[i];
+        for(int i = 0; i < jogo->tamanho; i++) {
+            int cor = jogo->sequencia[i];
             acender_led(cor, 300);
             multicore_fifo_push_blocking(10 + cor);
             sleep_ms(200);
         }
 
-        g_jogo.aguardando_jogada = 1;
-        g_jogo.btn_p = 0;
+        jogo->aguardando_jogada = 1;
+        jogo->btn_p = 0;
 
-        iniciar_timer();
+        iniciar_timer(jogo);
 
         for(int i = 0; i < 4; i++) {
             flg_botao[i] = 0;
         }
     } else {
-        g_jogo.rodando = 0;
-        g_jogo.aguardando_jogada = 0;
-        g_jogo.btn_p = 0;
+        jogo->rodando = 0;
+        jogo->aguardando_jogada = 0;
+        jogo->btn_p = 0;
 
-        cancelar_timer();
+        cancelar_timer(jogo);
 
         for(int j = 0; j < 3; j++) {
             for(int i = 0; i < 4; i++) gpio_put(leds_pin[i], 1);
@@ -337,12 +338,12 @@ void next_level() {
     }
 }
 
-void perdeu() {
-    g_jogo.rodando = 0;
-    g_jogo.aguardando_jogada = 0;
-    g_jogo.btn_p = 0;
+void perdeu(JogoState* jogo) {
+    jogo->rodando = 0;
+    jogo->aguardando_jogada = 0;
+    jogo->btn_p = 0;
 
-    cancelar_timer();
+    cancelar_timer(jogo);
     limpar_pontuacao();
 
     for(int j = 0; j < 3; j++) {
@@ -355,11 +356,11 @@ void perdeu() {
     multicore_fifo_push_blocking(3);
 }
 
-void jogada() {
+void jogada(JogoState* jogo) {
     static int n_jogada = 0;
     static int btn_c = 0;
 
-    if (!g_jogo.aguardando_jogada) return;
+    if (!jogo->aguardando_jogada) return;
 
     sleep_ms(10);
 
@@ -367,7 +368,7 @@ void jogada() {
 
     for(int i = 0; i < 4; i++) {
         if (flg_botao[i]) {
-            g_jogo.btn_p = 1;
+            jogo->btn_p = 1;
             btn_c = 1;
             flg_botao[i] = 0;
 
@@ -376,38 +377,50 @@ void jogada() {
 
             sleep_ms(50);
 
-            if(i == g_jogo.sequencia[n_jogada]) {
+            if(i == jogo->sequencia[n_jogada]) {
                 n_jogada++;
 
-                iniciar_timer();
+                iniciar_timer(jogo);
 
-                if(n_jogada >= g_jogo.tamanho) {
-                    atualizar_pontuacao();
+                if(n_jogada >= jogo->tamanho) {
+                    atualizar_pontuacao(jogo);
                     n_jogada = 0;
-                    g_jogo.aguardando_jogada = 0;
-                    g_jogo.btn_p = 0;
+                    jogo->aguardando_jogada = 0;
+                    jogo->btn_p = 0;
                     btn_c = 0;
                     sleep_ms(500);
-                    next_level();
+                    next_level(jogo);
                 } else {
-                    g_jogo.btn_p = 0;
+                    jogo->btn_p = 0;
                     btn_c = 0;
                 }
             } else {
-                perdeu();
+                perdeu(jogo);
                 n_jogada = 0;
-                g_jogo.btn_p = 0;
+                jogo->btn_p = 0;
                 btn_c = 0;
             }
             break;
         }
     }
 
-    if (!btn_c) g_jogo.btn_p = 0;
+    if (!btn_c) jogo->btn_p = 0;
 }
 
 // ================= MAIN =================
 int main() {
+    static JogoState jogo = {
+        .sequencia = {0},
+        .tamanho = 0,
+        .rodando = 0,
+        .aguardando_jogada = 0,
+        .btn_p = 0,
+        .flg_timeout = 0,
+        .id_alarme = -1
+    };
+    
+    ptr_jogo = &jogo;  // Configura ponteiro para acesso na IRQ
+    
     stdio_init_all();
     botoes_init();
 
@@ -416,16 +429,16 @@ int main() {
     while (true) {
         if (flg_inicio) {
             flg_inicio = 0;
-            new_game();
+            new_game(&jogo);
         }
 
-        if (g_jogo.flg_timeout) {
-            g_jogo.flg_timeout = 0;
-            perdeu();
+        if (jogo.flg_timeout) {
+            jogo.flg_timeout = 0;
+            perdeu(&jogo);
         }
 
-        if (g_jogo.rodando) {
-            jogada();
+        if (jogo.rodando) {
+            jogada(&jogo);
         }
 
         sleep_ms(10);
