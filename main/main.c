@@ -51,6 +51,7 @@ static const int botoes_pin[NUM_BOTOES] = {btn_r, btn_g, btn_b, btn_y};
 static const int leds_pin[NUM_BOTOES] = {led_r, led_g, led_b, led_y};
 
 // ================= ESTRUTURA DO JOGO =================
+// NOTA: Variável global necessária para acesso em múltiplas funções e callbacks
 typedef struct {
     int sequencia[MAX_SEQUENCIA];
     int tamanho;
@@ -71,6 +72,7 @@ typedef struct {
 } AudioState;
 
 // ================= VARIÁVEIS GLOBAIS =================
+// NOTA: Variáveis globais são necessárias para acesso em callbacks de IRQ
 static JogoState g_jogo = {0};
 static AudioState g_audio = {0};
 volatile int flg_inicio = 0;
@@ -234,6 +236,15 @@ void atualizar_pontuacao(void) {
     }
 }
 
+// Função auxiliar para determinar qual botão foi pressionado (sem loop na IRQ)
+static inline int identificar_botao(uint gpio) {
+    if (gpio == btn_r) return 0;
+    if (gpio == btn_g) return 1;
+    if (gpio == btn_b) return 2;
+    if (gpio == btn_y) return 3;
+    return -1;
+}
+
 void btn_callback(uint gpio, uint32_t events) {
     if (events == GPIO_IRQ_EDGE_FALL) {
         if (!g_jogo.rodando) {
@@ -243,14 +254,11 @@ void btn_callback(uint gpio, uint32_t events) {
 
         if (g_jogo.aguardando_jogada && !g_jogo.btn_p) {
             uint32_t tempo_atual = to_ms_since_boot(get_absolute_time());
-
-            for(int i = 0; i < NUM_BOTOES; i++) {
-                if (gpio == botoes_pin[i] && 
-                    (tempo_atual - ultimo_tempo_botao[i] > DEBOUNCE_TIME_MS)) {
-                    ultimo_tempo_botao[i] = tempo_atual;
-                    flg_botao[i] = 1;
-                    break;
-                }
+            int botao_id = identificar_botao(gpio);
+            
+            if (botao_id >= 0 && (tempo_atual - ultimo_tempo_botao[botao_id] > DEBOUNCE_TIME_MS)) {
+                ultimo_tempo_botao[botao_id] = tempo_atual;
+                flg_botao[botao_id] = 1;
             }
         }
     }
