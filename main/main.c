@@ -40,10 +40,7 @@
 
 #define DEBOUNCE_TIME_MS 100
 #define VOLUME_PCT 5  
-
-// 🔥 TIMER
 #define TEMPO_LIMITE_MS 3000
-alarm_id_t id_alarme = -1;
 
 // ================= ARRAYS =================
 const int pontos[10] = { led_10, led_9, led_8, led_7, led_6, led_5, led_4, led_3, led_2, led_1};
@@ -51,20 +48,24 @@ const int botoes_pin[4] = {btn_r, btn_g, btn_b, btn_y};
 const int leds_pin[4] = {led_r, led_g, led_b, led_y};
 
 // ================= VARIÁVEIS =================
-int sequencia[20];
-int tamanho = 0;
+static int sequencia[20];
+static int tamanho = 0;
 
 volatile int flg_inicio = 0;
 volatile int flg_rodando = 0;
-volatile int flg_botao[4] = {0, 0, 0, 0};
+volatile int flg_botao[4] = {0};
 volatile int aguardando_jogada = 0;
-volatile uint32_t ultimo_tempo_botao[4] = {0, 0, 0, 0};
+volatile uint32_t ultimo_tempo_botao[4] = {0};
 volatile int btn_p = 0;
+volatile int flg_timeout = 0;
+
+// ================= TIMER =================
+static alarm_id_t id_alarme = -1;
 
 // ================= AUDIO =================
-const uint8_t* som_atual = NULL;
-uint32_t tamanho_atual = 0;
-uint32_t wav_position = 0;
+volatile const uint8_t* som_atual = NULL;
+volatile uint32_t tamanho_atual = 0;
+volatile uint32_t wav_position = 0;
 volatile bool tocando = false;
 volatile bool audio_loop = false;
 
@@ -81,14 +82,10 @@ void limpar_pontuacao(void);
 void acender_led(int cor, int tempo_ms);
 void tocar_som(int cor);
 
-// 🔥 TIMER
-void iniciar_timer();
-int64_t timeout_callback(alarm_id_t id, void *user_data);
-
 // ================= TIMER =================
 int64_t timeout_callback(alarm_id_t id, void *user_data) {
     if (aguardando_jogada) {
-        perdeu();
+        flg_timeout = 1; // ✅ apenas sinaliza
     }
     return 0;
 }
@@ -221,20 +218,35 @@ void atualizar_pontuacao(void) {
 }
 
 void btn_callback(uint gpio, uint32_t events) {
-    if (events == 0x4) {
+    if (events == GPIO_IRQ_EDGE_FALL) {
+
         if (!flg_rodando) {
             flg_inicio = 1;
-        } else {
-            if (aguardando_jogada && !btn_p) {
-                uint32_t tempo_atual = to_ms_since_boot(get_absolute_time());
+            return;
+        }
 
-                for(int i = 0; i < 4; i++) {
-                    if (gpio == botoes_pin[i] &&
-                        (tempo_atual - ultimo_tempo_botao[i] > DEBOUNCE_TIME_MS)) {
-                        ultimo_tempo_botao[i] = tempo_atual;
-                        flg_botao[i] = 1;
-                    }
-                }
+        if (aguardando_jogada && !btn_p) {
+            uint32_t tempo_atual = to_ms_since_boot(get_absolute_time());
+
+            if (gpio == botoes_pin[0] &&
+                (tempo_atual - ultimo_tempo_botao[0] > DEBOUNCE_TIME_MS)) {
+                ultimo_tempo_botao[0] = tempo_atual;
+                flg_botao[0] = 1;
+            }
+            else if (gpio == botoes_pin[1] &&
+                (tempo_atual - ultimo_tempo_botao[1] > DEBOUNCE_TIME_MS)) {
+                ultimo_tempo_botao[1] = tempo_atual;
+                flg_botao[1] = 1;
+            }
+            else if (gpio == botoes_pin[2] &&
+                (tempo_atual - ultimo_tempo_botao[2] > DEBOUNCE_TIME_MS)) {
+                ultimo_tempo_botao[2] = tempo_atual;
+                flg_botao[2] = 1;
+            }
+            else if (gpio == botoes_pin[3] &&
+                (tempo_atual - ultimo_tempo_botao[3] > DEBOUNCE_TIME_MS)) {
+                ultimo_tempo_botao[3] = tempo_atual;
+                flg_botao[3] = 1;
             }
         }
     }
@@ -290,7 +302,7 @@ void next_level() {
         aguardando_jogada = 1;
         btn_p = 0;
 
-        iniciar_timer(); // 🔥 inicia timer
+        iniciar_timer();
 
         for(int i = 0; i < 4; i++) {
             flg_botao[i] = 0;
@@ -362,7 +374,7 @@ void jogada() {
             if(i == sequencia[n_jogada]) {
                 n_jogada++;
 
-                iniciar_timer(); // 🔥 reset timer
+                iniciar_timer();
 
                 if(n_jogada >= tamanho) {
                     atualizar_pontuacao();
@@ -400,6 +412,11 @@ int main() {
         if (flg_inicio) {
             flg_inicio = 0;
             new_game();
+        }
+
+        if (flg_timeout) {
+            flg_timeout = 0;
+            perdeu();
         }
 
         if (flg_rodando) {
